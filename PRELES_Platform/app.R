@@ -5,7 +5,7 @@ library(httr)
 library(markdown)
 
 DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_API_KEY <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # 建议改用环境变量
+DEEPSEEK_API_KEY <- "1" # 建议改用环境变量
 
 # 修改后的API调用函数
 call_deepseek_api <- function(GPP, ET, SW) {
