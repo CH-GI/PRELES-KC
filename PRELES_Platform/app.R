@@ -43,7 +43,7 @@ ui <- navbarPage(
   tabPanel("PRELES分析模块",
            sidebarLayout(
              sidebarPanel(
-               width = 2,
+               width = 3,
                numericInput('PAR', '光合有效辐射(PAR)', value = 20),
                numericInput('TAir', '日平均气温(℃)', value =  18),
                numericInput('VPD', '蒸汽压差(kPa)', value = 1.5),

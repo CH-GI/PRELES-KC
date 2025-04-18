@@ -1,6 +1,9 @@
 # PRELES-KC
 秦岭松栎林碳平衡计量平台
+<<<<<<< HEAD
 核心包版本号
+=======
+>>>>>>> 05841493412bae1b0aee9ffff43a150ce4406a6e
 R version=4.4.3
 Rtools version=4.4
 DBI version=1.2.3
