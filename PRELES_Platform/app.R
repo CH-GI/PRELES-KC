@@ -3,12 +3,14 @@ library(Rprebasso)
 library(jsonlite)
 library(httr)
 library(markdown)
+library(shinythemes)
 
-DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_API_KEY <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # 建议改用环境变量
+DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"#api_url
+DEEPSEEK_API_KEY <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
 
-# 修改后的API调用函数
+# API调用函数
 call_deepseek_api <- function(GPP, ET, SW) {
+  #构造请求头/请求体
   request_body <- list(
     model = "deepseek-chat",
     messages = list(
@@ -36,35 +38,53 @@ call_deepseek_api <- function(GPP, ET, SW) {
     }
   }
   return("API请求失败，请检查网络或密钥")
-}
+}# API调用函数
 
 ui <- navbarPage(
   title = "森林生态系统碳平衡计量平台",
-  tabPanel("PRELES分析模块",
+  theme = shinytheme("flatly"),
+  #单一分析模块
+  tabPanel("分析模块",
            sidebarLayout(
+             #侧边栏显示
              sidebarPanel(
-               width = 3,
-               numericInput('PAR', '光合有效辐射(PAR)', value = 20),
-               numericInput('TAir', '日平均气温(℃)', value =  18),
-               numericInput('VPD', '蒸汽压差(kPa)', value = 1.5),
-               numericInput('Precip', '降水量(mm)', value = 3),
-               numericInput('CO2', 'CO2浓度(ppm)', value = 280),
-               numericInput('fAPAR', 'fAPAR', value = 1),
-               selectInput('control','控制值',choices = c('0' = 0, '1' = 1)),
-               actionButton('analyze_btn', "预测", class = "btn-primary"),
-               actionButton('analyze_ai', "分析", class = "btn-primary")
-             ),
+               width = 3,#侧边栏宽度定义
+               radioButtons("les_baso", "模块", choices = c("Preles", "Prebas")),#模块选择
+               #Preles侧边栏
+               conditionalPanel(
+                 condition = "input.les_baso == 'Preles'",
+                 numericInput('PAR', '光合有效辐射(PAR)', value = 20),
+                 numericInput('TAir', '日平均气温(℃)', value =  18),
+                 numericInput('VPD', '日蒸汽压差(kPa)', value = 1.5),
+                 numericInput('Precip', '降水量(mm)', value = 3),
+                 numericInput('CO2', 'CO2浓度(ppm)', value = 280),
+                 numericInput('fAPAR', '冠层吸收光合有效辐射比例', value = 1),
+                 selectInput('control','控制值',choices = c('0' = 0, '1' = 1)),
+                 actionButton('analyze_btn', "预测", class = "btn-primary"),
+                 actionButton('analyze_ai', "分析", class = "btn-primary")
+                 ),#Preles侧边栏
+               #Prebaso侧边栏
+               conditionalPanel(
+                 condition = "input.les_baso == 'Prebaso'",
+                 
+               )#Prebaso侧边栏
+               ),#侧边栏显示
              mainPanel(
+               #Preles显示主窗口
+               conditionalPanel(
+                 condition = "input.les_baso == 'Preles'",
                h4("基础指标输出"),
                verbatimTextOutput("preles_results"),
                hr(),
                h4("DeepSeek分析"),
-               uiOutput("deepseek_analysis")  # 修改为uiOutput
-             )
+               uiOutput("deepseek_analysis")
+             )#Preles显示主窗口
            )
-  )
+           )
+  )#单一分析模块
 )
 server <- function(input, output) {
+  #Preles函数计算
   preles_data <- eventReactive(input$analyze_btn, {
     PRELES(
       PAR = input$PAR,
@@ -75,7 +95,7 @@ server <- function(input, output) {
       fAPAR = input$fAPAR,
       control = input$control
     )
-  })
+  })#Preles函数计算
   
   # 分析结果获取
   deepseek_result <- eventReactive(input$analyze_ai, {
@@ -87,9 +107,8 @@ server <- function(input, output) {
     data <- preles_data()
     cat(sprintf("GPP: %.2f μmol CO₂/m²/s\nET: %.2f mm/month\nSW: %.2f mm",
                 data$GPP, data$ET, data$SW))
-  })
-  
-  # 优化显示格式
+  })# 分析结果获取
+  #优化显示格式
   output$deepseek_analysis <- renderUI({
     req(deepseek_result())
     htmlContent <- markdownToHTML(
@@ -100,7 +119,7 @@ server <- function(input, output) {
       style = "
       background: #f8f9fa;
       padding: 15px;
-      border-left: 4px solid #28a745;  # 这是绿色边框
+      border-left: 4px solid #28a745;  # 绿色边框
       margin: 10px 0;
       border-radius: 0 5px 5px 0;  # 只圆化右侧
       font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -109,6 +128,6 @@ server <- function(input, output) {
     ",
       HTML(htmlContent)
     )
-  })
+  })  #优化显示格式
 }
-shinyApp(ui, server)
+shinyApp(ui, server)#运行程序
