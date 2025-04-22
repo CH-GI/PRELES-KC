@@ -5,8 +5,13 @@ library(httr)
 library(markdown)
 library(shinythemes)
 
+<<<<<<< HEAD
 DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"#api_url
 DEEPSEEK_API_KEY <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
+=======
+DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY <- "1" # 建议改用环境变量
+>>>>>>> 67f1b3c26f8d75cc138787665b42bbd12f91425d
 
 # API调用函数
 call_deepseek_api <- function(GPP, ET, SW) {
@@ -130,4 +135,8 @@ server <- function(input, output) {
     )
   })  #优化显示格式
 }
+<<<<<<< HEAD
 shinyApp(ui, server)#运行程序
+=======
+shinyApp(ui, server)
+>>>>>>> 67f1b3c26f8d75cc138787665b42bbd12f91425d
