@@ -6,7 +6,7 @@ def fetch_data():
 import cdsapi
     
 client = cdsapi.Client(
-  url: "https://cds.climate.copernicus.eu/api""
+  url: "https://cds.climate.copernicus.eu/api"",
   key: "f1acc66d-4ff2-4bf4-bf12-5daa0b215933""
 )
 

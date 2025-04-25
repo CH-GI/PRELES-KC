@@ -1,56 +1,19 @@
 library(shiny)
-library(Rprebasso)
-library(jsonlite)
-library(httr)
-library(markdown)
 library(shinythemes)
 library(readxl)
 library(ggplot2)
 library(plotly)
 library(DT)
+library(Rprebasso)
+library(httr)
+library(markdown)
+library(jsonlite)
 
-#变量编写规则：变量类型内容+页面序号
+# API配置
+DEEPSEEK_API_URL <- "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY <- "sk-744674fa55f14a959f9ab3e3f97edbbd" 
 
-Deepseek_api_url <- "https://api.deepseek.com/v1/chat/completions" # api_url
-Deepseek_api_key <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
-# deepseekAPI调用函数（页面1）
-Call_deepseek_api_1 <- function(GPP, ET, SW) {
-  #构造请求头/请求体
-  request_body <- list(
-    model = "deepseek-chat",
-    messages = list(
-      list(role = "system", content = "你是一个经验丰富、专业的森林生态学家"),
-      list(role = "user", content = paste0("用中文分析森林生态系统数据：GPP=", GPP, ", ET=", ET, ", SW=", SW, "。
-                                          要求：
-                                           1) 分点说明 
-                                           2) 指出潜在问题 
-                                           3) 给出管理建议
-                                           "))
-    ),
-    temperature = 0.3  # 降低随机性使回答更专业
-  )
-  
-  response <- POST(
-    url = Deepseek_api_url,
-    add_headers(
-      "Authorization" = paste("Bearer", Deepseek_api_key),
-      "Content-Type" = "application/json"
-    ),
-    body = toJSON(request_body, auto_unbox = TRUE),
-    encode = "json"
-  )
-  
-  if(status_code(response) == 200) {
-    response_data <- content(response, "parsed")
-    # 提取核心内容并移除多余的转义符
-    if(!is.null(response_data$choices[[1]]$message$content)) {
-      return(gsub("\\\\n", "\n", response_data$choices[[1]]$message$content))
-    }
-  }
-  return("API请求失败，请检查网络或密钥")
-}# deepseekAPI调用函数（页面1）
-
-# deepseekAPI调用函数（页面2）
+# 增强版API调用函数 - 处理时间序列数据
 Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = NULL) {
   # 准备数据摘要
   data_summary <- list(
@@ -106,9 +69,9 @@ Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = 
   
   # 发送请求
   response <- POST(
-    url = Deepseek_api_url,
+    url = DEEPSEEK_API_URL,
     add_headers(
-      "Authorization" = paste("Bearer", Deepseek_api_key),
+      "Authorization" = paste("Bearer", DEEPSEEK_API_KEY),
       "Content-Type" = "application/json"
     ),
     body = toJSON(request_body, auto_unbox = TRUE),
@@ -123,40 +86,11 @@ Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = 
     }
   }
   return("API请求失败，请检查网络或密钥")
-}# deepseekAPI调用函数（页面2）
+}
 
 ui <- navbarPage(
-  title = "森林生态系统碳平衡计量平台",
   theme = shinytheme("flatly"),
-  tabPanel("分析模块",
-           sidebarLayout(
-             sidebarPanel(
-               width = 3,
-               radioButtons("preles_prebas_1", "模块", choices = c("Preles", "Prebas")),#模块选择（页面1）
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Preles'",
-                 numericInput('PAR_1', '光合有效辐射(PAR)', value = 20),
-                 numericInput('TAir_1', '日平均气温(℃)', value =  18),
-                 numericInput('VPD_1', '日蒸汽压差(kPa)', value = 1.5),
-                 numericInput('Precip_1', '降水量(mm)', value = 3),
-                 numericInput('CO2_1', 'CO₂浓度(ppm)', value = 280),
-                 numericInput('fAPAR_1', '冠层吸收光合有效辐射比例', value = 1),
-                 selectInput('control_1','模型',choices = c('0' = 0, '1' = 1)),
-                 actionButton('forecast_preles_1', "预测", class = "btn-primary"),
-                 actionButton('analyze_deepseek_1', "分析", class = "btn-primary")),
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Prebaso'",)),
-             mainPanel(
-
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Preles'",
-               h4("基础指标输出"),
-               verbatimTextOutput("preles_forecast_results_1"),
-               hr(),
-               h4("DeepSeek分析"),
-               uiOutput("deepseek_analysis_results_1")))
-           )
-  ),
+  title = "森林生态系统碳平衡计量平台",
   tabPanel(
     "I/O分析",
     sidebarLayout(
@@ -200,7 +134,6 @@ ui <- navbarPage(
                    DTOutput("sw_table_2")),
           tabPanel("DeepSeek分析报告", 
                    uiOutput("analysis_report_2"),
-                   hr(),
                    downloadButton("download_report_2", "下载分析报告"))
         )
       )
@@ -209,55 +142,6 @@ ui <- navbarPage(
 )
 
 server <- function(input, output) {
-  #Preles函数计算（页面1）
-  preles_data_1 <- eventReactive(input$forecast_preles_1, {
-    PRELES(
-      PAR = input$PAR_1,
-      TAir = input$TAir_1,
-      VPD = input$VPD_1,
-      Precip = input$Precip_1,
-      CO2 = input$CO2_1,
-      fAPAR = input$fAPAR_1,
-      control = input$control_1)})#Preles函数计算获得结果（页面1）
-  
-  #输出preles预测结果（页面1）
-  output$preles_forecast_results_1 <- renderPrint({
-    data_1 <- preles_data_1()
-    cat(sprintf("GPP: %.2f gC/m²/d\nET: %.2f mm/d\nSW: %.2f mm",
-                data_1$GPP, data_1$ET, data_1$SW))})#输出preles预测结果（页面1）
-  
-  deepseek_result_1 <- reactiveVal("分析报告将显示在这里...") # 预先定义deepseek报告显示（页面1）
-  
-  # 调用deepseekapi函数返回原始分析文本（页面1）
-  observeEvent(input$analyze_deepseek_1, {
-    data_1 <- preles_data_1()
-    tryCatch({
-      result_1 <- Call_deepseek_api_1(GPP = data_1$GPP, ET = data_1$ET, SW = data_1$SW)
-      deepseek_result_1(result_1)
-    }, error = function(e) {
-      deepseek_result_1(paste("分析出错:", e$message))})})# 调用deepseekapi函数返回原始分析文本（页面1）
-  
-  #处理markdown文本（页面1）
-  output$deepseek_analysis_results_1 <- renderUI({ 
-    req(deepseek_result_1())
-    htmlContent <- markdownToHTML(
-      text = deepseek_result_1(),
-      fragment.only = TRUE
-    )
-    tags$div(
-      style = "
-      background: #f8f9fa;
-      padding: 15px;
-      border-left: 4px solid #28a745;  # 绿色边框
-      margin: 10px 0;
-      border-radius: 0 5px 5px 0;  # 只圆化右侧
-      font-family: 'Helvetica Neue', Arial, sans-serif;
-      line-height: 1.6;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);  # 添加轻微阴影增强层次感
-    ",
-      HTML(htmlContent))}) #处理markdown文本（页面1）
-  
-  #================================================================================
   
   # 读取上传的数据（页面2）
   data_2 <- reactive({
@@ -508,4 +392,4 @@ server <- function(input, output) {
     })# 下载分析报告（页面2）
 }
 
-shinyApp(ui, server)#运行程序
+shinyApp(ui = ui, server = server)
