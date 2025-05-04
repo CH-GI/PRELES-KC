@@ -2,7 +2,6 @@ library(shiny)
 library(Rprebasso)
 library(jsonlite)
 library(httr)
-library(httr2)
 library(markdown)
 library(shinythemes)
 library(readxl)
@@ -50,53 +49,6 @@ Call_deepseek_api_1 <- function(GPP, ET, SW) {
   }
   return("API请求失败，请检查网络或密钥")
 }# deepseekAPI调用函数（页面1）
-
-Call_deepseek_api_stream_1 <- function(GPP, ET, SW, update_callback) {
-  request_body <- list(
-    model = "deepseek-chat",
-    messages = list(
-      list(role = "system", content = "你是一个经验丰富、专业的森林生态学家"),
-      list(role = "user", content = paste0("用中文分析森林生态系统数据：GPP=", GPP, ", ET=", ET, ", SW=", SW, "。
-                                          要求：
-                                           1) 分点说明 
-                                           2) 指出潜在问题 
-                                           3) 给出管理建议
-                                           "))
-    ),
-    temperature = 0.3,
-    stream = TRUE # 注意：这里打开stream
-  )
-  
-  req <- request(Deepseek_api_url) %>%
-    req_headers(
-      "Authorization" = paste("Bearer", Deepseek_api_key),
-      "Content-Type" = "application/json"
-    ) %>%
-    req_body_json(request_body)
-  
-  # 发起请求，边接收边处理
-  resp <- req_stream(
-    req,
-    function(chunk) {
-      # 解析服务器传来的每块数据
-      text <- rawToChar(chunk)
-      lines <- strsplit(text, "\n")[[1]]
-      for (line in lines) {
-        line <- trimws(line)
-        if (startsWith(line, "data: ")) {
-          json_text <- sub("data: ", "", line)
-          if (json_text != "[DONE]") {
-            parsed <- jsonlite::fromJSON(json_text)
-            delta <- parsed$choices[[1]]$delta$content
-            if (!is.null(delta)) {
-              update_callback(delta)
-            }
-          }
-        }
-      }
-    }
-  )
-}
 
 # deepseekAPI调用函数（页面2）
 Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = NULL) {
@@ -195,14 +147,14 @@ ui <- navbarPage(
                conditionalPanel(
                  condition = "input.preles_prebas_1 == 'Prebaso'",)),
              mainPanel(
-
+               
                conditionalPanel(
                  condition = "input.preles_prebas_1 == 'Preles'",
-               h4("基础指标输出"),
-               verbatimTextOutput("preles_forecast_results_1"),
-               hr(),
-               h4("DeepSeek分析"),
-               uiOutput("deepseek_analysis_results_1")))
+                 h4("基础指标输出"),
+                 verbatimTextOutput("preles_forecast_results_1"),
+                 hr(),
+                 h4("DeepSeek分析"),
+                 uiOutput("deepseek_analysis_results_1")))
            )
   ),
   tabPanel(
@@ -279,24 +231,11 @@ server <- function(input, output) {
   # 调用deepseekapi函数返回原始分析文本（页面1）
   observeEvent(input$analyze_deepseek_1, {
     data_1 <- preles_data_1()
-    deepseek_result_1("") # 先清空
-    
     tryCatch({
-      Call_deepseek_api_stream_1(
-        GPP = data_1$GPP, 
-        ET = data_1$ET, 
-        SW = data_1$SW,
-        update_callback = function(new_text) {
-          isolate({
-            deepseek_result_1(paste0(deepseek_result_1(), new_text))
-          })
-        }
-      )
+      result_1 <- Call_deepseek_api_1(GPP = data_1$GPP, ET = data_1$ET, SW = data_1$SW)
+      deepseek_result_1(result_1)
     }, error = function(e) {
-      deepseek_result_1(paste("分析出错:", e$message))
-    })
-  })
-  # 调用deepseekapi函数返回原始分析文本（页面1）
+      deepseek_result_1(paste("分析出错:", e$message))})})# 调用deepseekapi函数返回原始分析文本（页面1）
   
   #处理markdown文本（页面1）
   output$deepseek_analysis_results_1 <- renderUI({ 
@@ -569,4 +508,4 @@ server <- function(input, output) {
     })# 下载分析报告（页面2）
 }
 
-shinyApp(ui, server)#运行程序
+shinyApp(ui = ui, server = server)#运行程序
