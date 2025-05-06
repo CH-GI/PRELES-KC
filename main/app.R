@@ -8,11 +8,22 @@ library(readxl)
 library(ggplot2)
 library(plotly)
 library(DT)
+library(ncdf4)
+library(DBI)
+library(RMySQL)
 
 #变量编写规则：变量类型内容+页面序号
-
+base_path <- "F:/"
 Deepseek_api_url <- "https://api.deepseek.com/v1/chat/completions" # api_url
 Deepseek_api_key <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
+
+mysql_conn <- dbConnect(RMySQL::MySQL(), 
+                        dbname = "preles",
+                        host = "47.108.94.53",
+                        user = "navicat_admin",
+                        password = "1QAZ2wsx`",
+                        port = 3306)
+
 # deepseekAPI调用函数（页面1）
 Call_deepseek_api_1 <- function(GPP, ET, SW) {
   #构造请求头/请求体
@@ -125,6 +136,46 @@ Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = 
   return("API请求失败，请检查网络或密钥")
 }# deepseekAPI调用函数（页面2）
 
+pointed_nc_read <- function(path,longitude,latitude) {
+  nc <- nc_open(path)
+  varname <- names(nc$var)
+  lat <- ncvar_get(nc, "lat")
+  lon <- ncvar_get(nc, "lon")
+  lat_idx <- which.min(abs(lat - latitude))
+  lon_idx <- which.min(abs(lon - longitude))
+  data <- ncvar_get(nc, varname)
+  if (length(dim(data)) == 3) {
+    value <- data[lon_idx, lat_idx, 1]
+  } else {
+    value <- data[lon_idx, lat_idx]
+  }
+  nc_close(nc)
+  return(value)
+}
+
+pointed_nc_read_2 <- function(path, longitude, latitude, varname) {
+  #用于co2与fapar
+  nc <- nc_open(path)
+  lat <- ncvar_get(nc, "latitude")
+  lon <- ncvar_get(nc, "longitude")
+  if (varname == "co2"){
+    distance <- sqrt((lat - latitude)^2 + (lon - longitude)^2)
+    idx <- which.min(distance)
+    var_data <- ncvar_get(nc, varname)
+    value <- var_data[idx]
+  } else {
+    lon_idx <- which.min(abs(lon - longitude))
+    lat_idx <- which.min(abs(lat - latitude))
+    lai_hv <- ncvar_get(nc, "lai_hv", start = c(lon_idx, lat_idx, 1), count = c(1, 1, 1))
+    lai_lv <- ncvar_get(nc, "lai_lv", start = c(lon_idx, lat_idx, 1), count = c(1, 1, 1))
+    if (is.na(lai_hv) || is.na(lai_lv)) return(NA)
+    total_lai <- lai_hv + lai_lv
+    value <- 1 - exp(-0.6 * total_lai)
+  }
+  nc_close(nc)
+  return(value)
+}
+
 ui <- navbarPage(
   title = "森林生态系统碳平衡计量平台",
   theme = shinytheme("flatly"),
@@ -205,10 +256,36 @@ ui <- navbarPage(
         )
       )
     )
+  ),
+  tabPanel(
+    "数据库值",
+    sidebarLayout(
+      sidebarPanel(
+        dateRangeInput("date_range_3", "选择日期范围：", start = "2022-02-01", end = "2022-02-3"),
+        numericInput("longitude_3", "经度：", value = 120),
+        numericInput("latitude_3", "纬度：", value = 30),
+        actionButton('forecast_preles_3', "预测", class = "btn-primary"),
+        actionButton('analyze_deepseek_3', "分析", class = "btn-primary")
+      ),
+      mainPanel(
+        tabsetPanel(
+          tabPanel("GPP 结果", 
+                   plotlyOutput("gpp_plot_3")),
+          tabPanel("ET 结果", 
+                   plotlyOutput("et_plot_3")),
+          tabPanel("SW 结果", 
+                   plotlyOutput("sw_plot_3")),
+          tabPanel("DeepSeek分析报告", 
+                   uiOutput("analysis_report_3"),
+                   hr(),
+                   downloadButton("download_report_3", "下载分析报告")))
+    )
   )
 )
+)
 
-server <- function(input, output) {
+#================================================================================================
+server <- function(input,output,session) {
   #Preles函数计算（页面1）
   preles_data_1 <- eventReactive(input$forecast_preles_1, {
     PRELES(
@@ -506,6 +583,106 @@ server <- function(input, output) {
     content = function(file) {
       writeLines(analysis_result_2(), file)
     })# 下载分析报告（页面2）
+  #=================================================================================================
+  results_3 <- reactiveValues(gpp = NULL, et = NULL, sw = NULL, date_seq = NULL)
+  observeEvent(input$forecast_preles_3, {
+    # 用户输入
+    start_date <- input$date_range_3[1]
+    end_date <- input$date_range_3[2]
+    lon <- input$longitude_3
+    lat <- input$latitude_3
+    
+    # 所有变量名（对应MySQL中表名）
+    variables <- c("par", "precip_duration", "precip_flux", "relative_humidity", "tair")
+    variables_2 <- c("co2", "fapar")
+    # 日期序列
+    date_seq <- seq.Date(start_date, end_date, by = "day")
+    
+    # 固定的文件路径前缀
+    
+    
+    # 初始化：存储每个变量的时间序列
+    var_series <- list()
+    
+    for (var in variables) {
+      # 针对每个变量查询数据库
+      query <- sprintf(
+        "SELECT * FROM %s WHERE date BETWEEN '%s' AND '%s'",
+        var, start_date, end_date
+      )
+      db_result <- dbGetQuery(mysql_conn, query)
+      
+      # 路径拼接 + 读取数据
+      values <- mapply(function(path, date) {
+        full_path <- paste0(base_path, path)
+        pointed_nc_read(full_path, lon, lat)
+      }, db_result[[2]], db_result[[1]])
+      
+      var_series[[var]] <- values
+    }
+
+    for (var in variables_2) {
+      # 针对每个变量查询数据库
+      query <- sprintf(
+        "SELECT * FROM %s WHERE date BETWEEN '%s' AND '%s'",
+        var, start_date, end_date
+      )
+      db_result <- dbGetQuery(mysql_conn, query)
+      
+      # 路径拼接 + 读取数据
+      values <- mapply(function(path, date) {
+        full_path <- paste0(base_path, path)
+        pointed_nc_read_2(full_path,lon,lat,var)
+      }, db_result[[2]], db_result[[1]])
+      
+      var_series[[var]] <- values
+    }
+    
+    # 计算降水量（precipitation）= precip_flux * precip_duration
+    precip_flux <- var_series[["precip_flux"]]
+    precip_duration <- var_series[["precip_duration"]]
+    precipitation <- precip_flux * precip_duration
+    
+    # 计算蒸气压差（VPD）
+    tair <- var_series[["tair"]]
+    rh <- var_series[["relative_humidity"]]
+    
+    # 饱和蒸气压 (E_s) 使用温度 tair（单位：°C），这里用简化公式计算
+    E_s <- 0.6108 * exp((17.27 * tair) / (tair + 237.3))  # 饱和蒸气压（单位：kPa）
+    E_a <- rh / 100 * E_s  # 实际蒸气压
+    vpd <- E_s - E_a  # 蒸气压差
+    # 使用preles预测
+    result_3 <- PRELES(PAR = var_series[["par"]],
+                     TAir = var_series[["tair"]],
+                     VPD = vpd,
+                     Precip = precipitation,
+                     CO2 = var_series[["co2"]],
+                     fAPAR = var_series[["fapar"]])
+    results_3$gpp <- result_3$GPP
+    results_3$et <- result_3$ET
+    results_3$sw <- result_3$SW
+    results_3$date_seq <- date_seq
+    results_3$gpp <- zoo::na.approx(results_3$gpp, na.rm = FALSE)
+    results_3$et <- zoo::na.approx(results_3$et, na.rm = FALSE)
+    results_3$sw <- zoo::na.approx(results_3$sw, na.rm = FALSE)
+  })
+  print(results_3)
+  # 输出折线图
+  output$gpp_plot_3 <- renderPlotly({
+    req(results_3$gpp, results_3$date_seq)
+    plot_ly(x = ~results_3$date_seq, y = ~results_3$gpp, type = 'scatter', mode = 'lines', line = list(color = 'forestgreen')) %>%
+      layout(title = "GPP", xaxis = list(title = "Date"), yaxis = list(title = "GPP"))
+  })
+  output$et_plot_3 <- renderPlotly({
+    req(results_3$et, results_3$date_seq)
+    plot_ly(x = ~results_3$date_seq, y = ~results_3$et, type = 'scatter', mode = 'lines', line = list(color = 'black')) %>%
+      layout(title = "ET", xaxis = list(title = "Date"), yaxis = list(title = "ET"))
+  })
+  output$sw_plot_3 <- renderPlotly({
+    req(results_3$sw, results_3$date_seq)
+    plot_ly(x = ~results_3$date_seq, y = ~results_3$sw, type = 'scatter', mode = 'lines', line = list(color = 'blue')) %>%
+      layout(title = "SW", xaxis = list(title = "Date"), yaxis = list(title = "SW"))
+  })
 }
 
 shinyApp(ui = ui, server = server)#运行程序

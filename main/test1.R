@@ -1,212 +1,448 @@
 library(shiny)
-library(shinythemes)
-library(leaflet)
-library(sf)
-library(dplyr)
-library(DT)
+library(DBI)
+library(RMySQL)
+library(ncdf4)
+library(ggplot2)
+library(zoo)
+library(Rprebasso)
 
-ui <- navbarPage(
-  theme = shinytheme("flatly"),
-  title = "森林生态系统碳平衡计量平台",
-  tabPanel("区域分析",
-  sidebarLayout(
-    sidebarPanel(
-      width = 4,
-      h4("1. 定义多边形区域"),
-      numericInput("lat", "纬度:", value = NULL),
-      numericInput("lng", "经度:", value = NULL),
-      actionButton("add_point", "通过坐标添加点"),
-      actionButton("clear_points", "清除所有点"),
-      hr(),
-      h4("当前多边形顶点:"),
-      DTOutput("polygon_points_table"),
-      actionButton("delete_selected", "删除选中点"),
-      hr(),
-      h4("2. 提取区域内数据"),
-      actionButton("extract_data", "提取数据"),
-      hr(),
-      h4("3. 下载结果"),
-      downloadButton("downloadData", "下载提取的数据"),
-      hr(),
-      h5("提示: 也可以直接在地图上点击添加点")
-    ),
-    mainPanel(
-      width = 8,
-      leafletOutput("map", height = "500px"),
-      h4("提取的数据:"),
-      DTOutput("extracted_data_table")
-    )
-  ))
-)
-
-server <- function(input, output, session) {
-  # 示例数据 - 实际应用中替换为你的数据库
-  sample_data <- reactive({
-    set.seed(123)
-    data.frame(
-      id = 1:100,
-      lat = runif(100, 30, 40),
-      lng = runif(100, 110, 120),
-      value = rnorm(100, 50, 10)
-    )
-  })
+get_par_at_point <- function(nc_path, lon_input, lat_input, search_radius = 1) {
+  library(ncdf4)
   
-  # 存储多边形顶点
-  polygon_points <- reactiveVal(data.frame(lat = numeric(), lng = numeric(), id = integer()))
+  nc <- nc_open(nc_path)
+  lon <- ncvar_get(nc, "lon")
+  lat <- ncvar_get(nc, "lat")
+  data <- ncvar_get(nc, "Solar_Radiation_Flux")
+  data[data == -9999] <- NA
   
-  # 添加点到多边形 - 通过坐标输入
-  observeEvent(input$add_point, {
-    req(input$lat, input$lng)
-    new_id <- ifelse(nrow(polygon_points()) == 0, 1, max(polygon_points()$id) + 1)
-    new_point <- data.frame(lat = input$lat, lng = input$lng, id = new_id)
-    updated_points <- rbind(polygon_points(), new_point)
-    polygon_points(updated_points)
+  # 时间
+  time_raw <- ncvar_get(nc, "time")
+  time_units <- ncatt_get(nc, "time", "units")$value
+  date <- as.Date(time_raw, origin = sub("days since ", "", time_units))
+  units <- ncatt_get(nc, "Solar_Radiation_Flux", "units")$value
+  
+  # 找最近网格索引
+  lon_index <- which.min(abs(lon - lon_input))
+  lat_index <- which.min(abs(lat - lat_input))
+  value <- data[lon_index, lat_index]
+  
+  # 如果不是 NA，直接返回
+  if (!is.na(value)) {
+    nc_close(nc)
+    return(list(
+      date = date,
+      lon = round(lon[lon_index], 4),
+      lat = round(lat[lat_index], 4),
+      value = value * 0.0046,
+      units = units
+    ))
+  }
+  
+  # 否则，在 search_radius 内找最近非 NA 值
+  lon_res <- mean(diff(lon))  # 经度分辨率
+  lat_res <- mean(diff(lat))  # 纬度分辨率
+  lon_range <- round(search_radius / lon_res)
+  lat_range <- round(search_radius / lat_res)
+  
+  nearby_coords <- expand.grid(
+    dx = -lon_range:lon_range,
+    dy = -lat_range:lat_range
+  )
+  
+  nearby_coords <- nearby_coords[!(nearby_coords$dx == 0 & nearby_coords$dy == 0), ]  # 排除自身
+  
+  min_dist <- Inf
+  nearest_value <- NA
+  nearest_lon <- NA
+  nearest_lat <- NA
+  
+  for (i in seq_len(nrow(nearby_coords))) {
+    ix <- lon_index + nearby_coords$dx[i]
+    iy <- lat_index + nearby_coords$dy[i]
     
-    # 清空输入框
-    updateNumericInput(session, "lat", value = NA)
-    updateNumericInput(session, "lng", value = NA)
-  })
-  
-  # 添加点到多边形 - 通过地图点击
-  observeEvent(input$map_click, {
-    click <- input$map_click
-    new_id <- ifelse(nrow(polygon_points()) == 0, 1, max(polygon_points()$id) + 1)
-    new_point <- data.frame(lat = click$lat, lng = click$lng, id = new_id)
-    updated_points <- rbind(polygon_points(), new_point)
-    polygon_points(updated_points)
-  })
-  
-  # 清除所有点
-  observeEvent(input$clear_points, {
-    polygon_points(data.frame(lat = numeric(), lng = numeric(), id = integer()))
-  })
-  
-  # 删除选中的点
-  observeEvent(input$delete_selected, {
-    req(input$polygon_points_table_rows_selected)
-    points <- polygon_points()
-    updated_points <- points[-input$polygon_points_table_rows_selected, ]
-    polygon_points(updated_points)
-  })
-  
-  # 显示当前多边形顶点表格（可交互选择）
-  output$polygon_points_table <- renderDT({
-    req(nrow(polygon_points()) > 0)
-    datatable(
-      polygon_points() %>% select(-id),
-      options = list(
-        pageLength = 5,
-        dom = 't',
-        ordering = FALSE
-      ),
-      selection = 'single',
-      rownames = FALSE
-    )
-  })
-  
-  # 创建地图
-  output$map <- renderLeaflet({
-    leaflet() %>%
-      addTiles() %>%
-      setView(lng = 115, lat = 35, zoom = 5)
-  })
-  
-  # 观察多边形顶点变化并更新地图
-  observe({
-    points <- polygon_points()
-    leafletProxy("map") %>%
-      clearShapes() %>%
-      clearMarkers()
-    
-    if (nrow(points) > 0) {
-      # 添加标记点（带编号）
-      leafletProxy("map") %>%
-        addMarkers(
-          data = points,
-          lng = ~lng, lat = ~lat,
-          label = ~as.character(1:nrow(points)),
-          labelOptions = labelOptions(noHide = TRUE, direction = "top")
-        )
-      
-      # 如果至少有3个点，绘制多边形
-      if (nrow(points) >= 3) {
-        leafletProxy("map") %>%
-          addPolygons(
-            data = points,
-            lng = ~lng, lat = ~lat,
-            fillColor = "blue",
-            fillOpacity = 0.2,
-            stroke = TRUE,
-            color = "blue",
-            weight = 2
-          )
+    if (ix >= 1 && ix <= length(lon) && iy >= 1 && iy <= length(lat)) {
+      v <- data[ix, iy]
+      if (!is.na(v)) {
+        dist <- sqrt((lon[ix] - lon_input)^2 + (lat[iy] - lat_input)^2)
+        if (dist < min_dist && dist <= search_radius) {
+          min_dist <- dist
+          nearest_value <- v
+          nearest_lon <- lon[ix]
+          nearest_lat <- lat[iy]
+        }
       }
     }
-    
-    # 添加示例数据点
-    leafletProxy("map") %>%
-      addCircleMarkers(
-        data = sample_data(),
-        lng = ~lng, lat = ~lat,
-        radius = 3,
-        color = "red",
-        fillOpacity = 0.8,
-        group = "data_points"
-      )
-  })
+  }
   
-  # 提取多边形内数据
-  extracted_data <- reactiveVal(NULL)
+  nc_close(nc)
   
-  observeEvent(input$extract_data, {
-    req(nrow(polygon_points()) >= 3)
-    
-    # 创建多边形sf对象
-    poly_sf <- polygon_points() %>%
-      st_as_sf(coords = c("lng", "lat"), crs = 4326) %>%
-      summarise(geometry = st_combine(geometry)) %>%
-      st_cast("POLYGON") %>%
-      st_convex_hull()
-    
-    # 创建数据点sf对象
-    data_sf <- sample_data() %>%
-      st_as_sf(coords = c("lng", "lat"), crs = 4326)
-    
-    # 执行空间查询
-    inside <- st_intersects(data_sf, poly_sf, sparse = FALSE)[,1]
-    
-    # 提取结果
-    result <- sample_data()[inside, ]
-    extracted_data(result)
-    
-    # 在地图上高亮显示选中的点
-    leafletProxy("map") %>%
-      clearGroup("selected_points") %>%
-      addCircleMarkers(
-        data = result,
-        lng = ~lng, lat = ~lat,
-        radius = 5,
-        color = "green",
-        fillOpacity = 1,
-        group = "selected_points"
-      )
-  })
+  return(list(
+    date = date,
+    lon = if (!is.na(nearest_value)) round(nearest_lon, 4) else NA,
+    lat = if (!is.na(nearest_value)) round(nearest_lat, 4) else NA,
+    value = nearest_value * 0.0046,
+    units = units,
+    distance = if (!is.na(nearest_value)) round(min_dist, 4) else NA
+  ))
+}
+
+get_co2_at_point <- function(nc_path, lon_input, lat_input, max_distance_km = 25) {
+  library(ncdf4)
+  library(geosphere)
+  nc <- nc_open(nc_path)
   
-  # 显示提取的数据
-  output$extracted_data_table <- renderDT({
-    req(extracted_data())
-    datatable(extracted_data(), options = list(pageLength = 5))
-  })
+  lons <- ncvar_get(nc, "longitude")
+  lats <- ncvar_get(nc, "latitude")
+  co2 <- ncvar_get(nc, "co2")
   
-  # 下载提取的数据
-  output$downloadData <- downloadHandler(
-    filename = function() {
-      paste("extracted_data_", Sys.Date(), ".csv", sep = "")
-    },
-    content = function(file) {
-      write.csv(extracted_data(), file, row.names = FALSE)
+  co2[co2 == -999] <- NA
+  df <- data.frame(lon = lons, lat = lats, co2 = co2)
+  distances <- distHaversine(cbind(df$lon, df$lat), c(lon_input, lat_input))
+  
+  df$distance_km <- distances / 1000
+  df_valid <- df[!is.na(df$co2) & df$distance_km <= max_distance_km, ]
+  
+  if (nrow(df_valid) == 0) {
+    return(list(
+      lon = lon_input,
+      lat = lat_input,
+      co2_ppm = NA,
+      distance_km = NA
+    ))
+  } else {
+    nearest <- df_valid[which.min(df_valid$distance_km), ]
+    return(list(
+      lon = nearest$lon,
+      lat = nearest$lat,
+      co2_ppm = nearest$co2,
+      distance_km = nearest$distance_km
+    ))
+  }
+}
+
+get_precip_duration_at_point <- function(file_path, lon_input, lat_input, search_radius = 1.0) {
+  library(ncdf4)
+  precip_file <- nc_open(file_path)
+  
+  # 读取变量
+  lons <- ncvar_get(precip_file, "lon")
+  lats <- ncvar_get(precip_file, "lat")
+  precip <- ncvar_get(precip_file, "Precipitation_Solid_Duration_Fraction")
+  
+  # 替换缺失值
+  precip[precip == -9999] <- NA
+  
+  # 查找最近的经纬度索引
+  lon_idx <- which.min(abs(lons - lon_input))
+  lat_idx <- which.min(abs(lats - lat_input))
+  
+  # 获取该点的降水值
+  value <- precip[lon_idx, lat_idx]
+  
+  # 如果该点的值缺失，进行范围查找
+  if (is.na(value)) {
+    # 搜索范围内的经纬度索引
+    lon_range <- which(abs(lons - lon_input) <= search_radius)
+    lat_range <- which(abs(lats - lat_input) <= search_radius)
+    
+    # 查找范围内的最近有效值
+    found_value <- NA
+    for (lon in lon_range) {
+      for (lat in lat_range) {
+        # 跳过缺失值
+        if (!is.na(precip[lon, lat])) {
+          found_value <- precip[lon, lat]
+          break
+        }
+      }
+      if (!is.na(found_value)) break
     }
+    
+    value <- found_value
+  }
+  
+  # 关闭文件
+  nc_close(precip_file)
+  
+  # 返回查询的值
+  return(list(precip_duration = value))
+}
+
+get_precip_flux_at_point <- function(nc_path, target_lon, target_lat, max_distance = 0.5) {
+  nc <- nc_open(nc_path)
+  
+  lon <- ncvar_get(nc, "lon")
+  lat <- ncvar_get(nc, "lat")
+  flux <- ncvar_get(nc, "Precipitation_Flux", collapse_degen = FALSE)  # 强制保留三维
+  time <- ncvar_get(nc, "time")
+  time_units <- ncatt_get(nc, "time", "units")$value
+  time_origin <- sub("days since ", "", time_units)
+  date <- as.character(as.Date(time, origin = time_origin))
+  
+  grid <- expand.grid(lon = lon, lat = lat)
+  grid$value <- as.vector(flux[, , 1])
+  
+  grid$dist <- sqrt((grid$lon - target_lon)^2 + (grid$lat - target_lat)^2)
+  grid <- grid[order(grid$dist), ]
+  
+  nearest <- grid[1, ]
+  
+  result <- list(
+    date = date,
+    lon = nearest$lon,
+    lat = nearest$lat,
+    value = ifelse(nearest$dist <= max_distance, nearest$value, NA),
+    units = ncatt_get(nc, "Precipitation_Flux", "units")$value
   )
+  
+  nc_close(nc)
+  return(result)
+}
+
+get_relative_humidity_at_point <- function(file_path, target_lon, target_lat, max_distance = 0.1) {
+  library(ncdf4)
+  nc <- nc_open(file_path)
+  
+  lon <- ncvar_get(nc, "lon")
+  lat <- ncvar_get(nc, "lat")
+  rh <- ncvar_get(nc, "Relative_Humidity_2m_09h", collapse_degen = FALSE)
+  time <- ncvar_get(nc, "time")
+  time_units <- ncatt_get(nc, "time", "units")$value
+  nc_close(nc)
+  
+  # 日期转换
+  origin <- sub("days since ", "", time_units)
+  date <- as.Date(time, origin = origin)
+  
+  # 构建网格并转为 data.frame
+  grid_df <- expand.grid(lon = lon, lat = lat)
+  grid_df$value <- as.vector(rh[, , 1])
+  
+  # 计算距离并筛选
+  grid_df$dist <- sqrt((grid_df$lon - target_lon)^2 + (grid_df$lat - target_lat)^2)
+  grid_df <- grid_df[!is.na(grid_df$value) & grid_df$value != -9999, ]
+  
+  if (nrow(grid_df) == 0 || min(grid_df$dist) > max_distance) {
+    return(list(
+      date = as.character(date),
+      lon = target_lon,
+      lat = target_lat,
+      value = NA,
+      units = "%"
+    ))
+  }
+  
+  nearest <- grid_df[which.min(grid_df$dist), ]
+  return(list(
+    date = as.character(date),
+    lon = nearest$lon,
+    lat = nearest$lat,
+    value = nearest$value,
+    units = "%"
+  ))
+}
+
+get_temperature_at_point <- function(nc_path, lon_val, lat_val, missing_value = -9999) {
+  nc <- nc_open(nc_path)
+  on.exit(nc_close(nc))
+  
+  lon <- ncvar_get(nc, "lon")
+  lat <- ncvar_get(nc, "lat")
+  
+  lon_idx <- which.min(abs(lon - lon_val))
+  lat_idx <- which.min(abs(lat - lat_val))
+  
+  temp <- ncvar_get(nc, "Temperature_Air_2m_Mean_24h", collapse_degen = FALSE)
+  time_raw <- ncvar_get(nc, "time")
+  time_units <- ncatt_get(nc, "time", "units")$value
+  time_origin <- sub("days since ", "", time_units)
+  date <- as.character(as.Date(time_raw[1], origin = time_origin))
+  
+  value_k <- temp[lon_idx, lat_idx, 1]
+  value_c <- ifelse(value_k == missing_value, NA, value_k - 273.15)
+  
+  return(list(
+    date = date,
+    lon = lon[lon_idx],
+    lat = lat[lat_idx],
+    value_K = value_k,
+    value_C = value_c,
+    units = "°C"
+  ))
+}
+
+get_fapar_at_point <- function(nc_path, lon_val, lat_val, k = 0.5) {
+  nc <- nc_open(nc_path)
+  on.exit(nc_close(nc))
+  
+  lon <- ncvar_get(nc, "longitude")
+  lat <- ncvar_get(nc, "latitude")
+  lon_idx <- which.min(abs(lon - lon_val))
+  lat_idx <- which.min(abs(lat - lat_val))
+  
+  lai_hv_raw <- ncvar_get(nc, "lai_hv")
+  lai_lv_raw <- ncvar_get(nc, "lai_lv")
+  
+  dims <- dim(lai_hv_raw)
+  
+  if (length(dims) == 3) {
+    lai_hv <- lai_hv_raw[lon_idx, lat_idx, 1]
+    lai_lv <- lai_lv_raw[lon_idx, lat_idx, 1]
+  } else if (length(dims) == 2) {
+    lai_hv <- lai_hv_raw[lon_idx, lat_idx]
+    lai_lv <- lai_lv_raw[lon_idx, lat_idx]
+  } else {
+    stop("变量维度不支持，dim: ", paste(dims, collapse = " x "))
+  }
+  
+  # 修复：先判断是否为 NA，再判断是否大于缺失值阈值
+  if (!is.na(lai_hv) && lai_hv > 1e+30) lai_hv <- NA
+  if (!is.na(lai_lv) && lai_lv > 1e+30) lai_lv <- NA
+  
+  lai_total <- sum(c(lai_hv, lai_lv), na.rm = TRUE)
+  fapar <- if (!is.na(lai_total)) 1 - exp(-k * lai_total) else NA
+  
+  time_raw <- ncvar_get(nc, "valid_time")
+  time_units <- ncatt_get(nc, "valid_time", "units")$value
+  time_origin <- sub("seconds since ", "", time_units)
+  date <- if (length(time_raw) > 0) {
+    as.character(as.POSIXct(time_raw[1], origin = time_origin, tz = "UTC"))
+  } else {
+    NA
+  }
+  
+  return(list(
+    date = date,
+    lon = lon[lon_idx],
+    lat = lat[lat_idx],
+    lai_hv = lai_hv,
+    lai_lv = lai_lv,
+    lai_total = lai_total,
+    fapar = fapar
+  ))
+}
+
+
+# 设置NetCDF根目录路径
+nc_root <- "/path/to/nc/files/"  # ← 修改为你的实际路径
+
+# UI
+ui <- navbarPage("森林生态系统模拟",
+                 tabPanel("预测",
+                          sidebarLayout(
+                            sidebarPanel(
+                              dateInput("start_date", "开始日期", value = Sys.Date() - 30),
+                              dateInput("end_date", "结束日期", value = Sys.Date()),
+                              numericInput("lat", "纬度", value = 35.0),
+                              numericInput("lon", "经度", value = 105.0),
+                              actionButton("run", "运行预测")
+                            ),
+                            mainPanel(
+                              plotOutput("plot_gpp"),
+                              plotOutput("plot_et"),
+                              plotOutput("plot_sw")
+                            )
+                          )
+                 )
+)
+
+# Server
+server <- function(input, output) {
+  observeEvent(input$run, {
+    req(input$start_date, input$end_date, input$lat, input$lon)
+    
+    # 数据库连接
+    conn <- dbConnect(
+      RMySQL::MySQL(),
+      dbname = "preles",        # ← 修改为你的数据库名
+      host = "47.108.94.53",
+      port = 3306,
+      user = "navicat_admin",        # ← 修改为用户名
+      password = "1QAZ2wsx`" # ← 修改为密码
+    )
+    
+    date_seq <- seq.Date(input$start_date, input$end_date, by = "day")
+    date_str <- sprintf("('%s')", paste(date_seq, collapse = "','"))
+    
+    get_paths <- function(table_name) {
+      sql <- sprintf("SELECT * FROM %s WHERE date IN %s", table_name, date_str)
+      df <- dbGetQuery(conn, sql)
+      df$full_path <- file.path(nc_root, df[, 2])
+      df
+    }
+    
+    co2_df <- get_paths("co2")
+    fapar_df <- get_paths("fapar")
+    par_df <- get_paths("par")
+    precip_dur_df <- get_paths("precip_duration")
+    precip_flux_df <- get_paths("precip_flux")
+    rh_df <- get_paths("relative_humidity")
+    tair_df <- get_paths("tair")
+    
+    dbDisconnect(conn)
+    
+    # 读取数据（需你自定义的函数）
+    co2 <- mapply(get_co2_at_point, co2_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    fapar <- mapply(get_fapar_at_point, fapar_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    par <- mapply(get_par_at_point, par_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    precip_dur <- mapply(get_precip_duration_at_point, precip_dur_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    precip_flux <- mapply(get_precip_flux_at_point, precip_flux_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    rh <- mapply(get_relative_humidity_at_point, rh_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    tair <- mapply(get_temperature_at_point, tair_df$full_path, MoreArgs = list(lat = input$lat, lon = input$lon))
+    
+    # 提取出 flux 和 duration 中的值
+    precip_flux_vals <- sapply(precip_flux, function(x) x$value)
+    precip_dur_vals <- sapply(precip_dur, function(x) x$precip_duration)
+    
+    # 计算 Precip
+    Precip <- precip_dur_vals * precip_flux_vals
+    
+    # 计算其他变量
+    VPD <- 0.6108 * exp((17.27 * tair) / (tair + 237.3)) * (1 - rh / 100)
+    
+    # 构建输入表
+    input_df <- data.frame(
+      PAR = sapply(par, function(x) x$value),
+      TAir = tair,
+      VPD = VPD,
+      Precip = Precip,
+      fAPAR = sapply(fapar, function(x) x$fapar),
+      CO2 = sapply(co2, function(x) x$co2_ppm),
+      DOY = as.numeric(format(date_seq, "%j"))
+    )
+    
+    # 线性插值缺失值
+    input_df[] <- lapply(input_df, function(col) {
+      if (is.numeric(col)) na.approx(col, na.rm = FALSE) else col
+    })
+    
+    # 删除无法插值的NA（通常是头尾）
+    valid_rows <- complete.cases(input_df)
+    input_df <- input_df[valid_rows, ]
+    date_seq <- date_seq[valid_rows]
+    
+    # 调用 preles 模型
+    result <- preles(input_df)
+    
+    # 绘图
+    output$plot_gpp <- renderPlot({
+      ggplot(data.frame(Date = date_seq, GPP = result$GPP), aes(Date, GPP)) +
+        geom_line(color = "forestgreen") +
+        labs(title = "GPP", y = "GPP", x = "日期")
+    })
+    
+    output$plot_et <- renderPlot({
+      ggplot(data.frame(Date = date_seq, ET = result$ET), aes(Date, ET)) +
+        geom_line(color = "blue") +
+        labs(title = "ET", y = "蒸散发", x = "日期")
+    })
+    
+    output$plot_sw <- renderPlot({
+      ggplot(data.frame(Date = date_seq, SW = result$SW), aes(Date, SW)) +
+        geom_line(color = "orange") +
+        labs(title = "SW", y = "土壤含水量", x = "日期")
+    })
+  })
 }
 
 shinyApp(ui, server)
