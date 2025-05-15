@@ -24,7 +24,7 @@ Deepseek_api_key <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
 fapar_qj <- 0.8
 con <- dbConnect(RMySQL::MySQL(), 
                         dbname = "preles",
-                        host = "47.108.94.53",
+                        host = "localhost",
                         user = "navicat_admin",
                         password = "1QAZ2wsx`",
                         port = 3306)
