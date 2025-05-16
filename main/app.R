@@ -16,18 +16,18 @@ library(dplyr)
 library(tidyr)
 library(purrr)     
 library(zoo)
-library(shinydashboard)
+library(bs4Dash)
 
 #变量编写规则：变量类型内容+页面序号
 Deepseek_api_url <- "https://api.deepseek.com/v1/chat/completions" # api_url
 Deepseek_api_key <- "sk-744674fa55f14a959f9ab3e3f97edbbd" # api_key
 fapar_qj <- 0.8
 con <- dbConnect(RMySQL::MySQL(), 
-                        dbname = "preles",
-                        host = "localhost",
-                        user = "navicat_admin",
-                        password = "1QAZ2wsx`",
-                        port = 3306)
+                 dbname = "preles",
+                 host = "47.108.94.53",
+                 user = "navicat_admin",
+                 password = "1QAZ2wsx`",
+                 port = 3306)
 get_nearest_point <- function(lon, lat) {
   # 使用ST_Distance_Sphere计算最短距离
   query <- paste("SELECT lon, lat, ST_Distance_Sphere(POINT(lon, lat), POINT(", lon, ", ", lat, ")) AS distance
@@ -178,138 +178,220 @@ Call_deepseek_api_2 <- function(gpp_series, et_series, sw_series, date_series = 
 
 
 
-ui <- navbarPage(
+ui <- bs4DashPage(
   title = "森林生态系统碳平衡计量平台",
-  theme = shinytheme("flatly"),
-  footer = div(
-    style = "text-align: center; padding: 10px; background-color: #f5f5f5;",
-    HTML("<a href='https://beian.miit.gov.cn/' target='_blank'>陕ICP备2025067822号</a>")),
-  tabPanel("分析模块",
-           sidebarLayout(
-             sidebarPanel(
-               width = 3,
-               radioButtons("preles_prebas_1", "模块", choices = c("Preles", "Prebas")),#模块选择（页面1）
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Preles'",
-                 numericInput('PAR_1', '光合有效辐射(PAR)', value = 20),
-                 numericInput('TAir_1', '日平均气温(℃)', value =  18),
-                 numericInput('VPD_1', '日蒸汽压差(kPa)', value = 1.5),
-                 numericInput('Precip_1', '降水量(mm)', value = 3),
-                 numericInput('CO2_1', 'CO₂浓度(ppm)', value = 280),
-                 numericInput('fAPAR_1', '冠层吸收光合有效辐射比例', value = 1),
-                 selectInput('control_1','模型',choices = c('0' = 0, '1' = 1)),
-                 actionButton('forecast_preles_1', "预测", class = "btn-primary"),
-                 actionButton('analyze_deepseek_1', "分析", class = "btn-primary")),
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Prebaso'",)),
-             mainPanel(
-               
-               conditionalPanel(
-                 condition = "input.preles_prebas_1 == 'Preles'",
-                 h4("基础指标输出"),
-                 verbatimTextOutput("preles_forecast_results_1"),
-                 hr(),
-                 h4("DeepSeek分析"),
-                 uiOutput("deepseek_analysis_results_1")))
-           )
+  header = bs4DashNavbar(skin = "light"),
+  sidebar = bs4DashSidebar(
+    skin = "light",
+    status = "primary",
+    collapsed = TRUE,  # 初始状态为折叠
+    bs4SidebarMenu(
+      bs4SidebarMenuItem(
+        "分析模块",
+        tabName = "analysis",
+        icon = icon("calculator")
+      ),
+      bs4SidebarMenuItem(
+        "I/O分析",
+        tabName = "io",
+        icon = icon("file-upload")
+      ),
+      bs4SidebarMenuItem(
+        "数据库值",
+        tabName = "database",
+        icon = icon("database")
+      ),
+      bs4SidebarMenuItem(
+        "热力图",
+        tabName = "heatmap",
+        icon = icon("map")
+      )
+    )
   ),
-  tabPanel(
-    "I/O分析",
-    sidebarLayout(
-      sidebarPanel(
-        h4("数据上传"),
-        width = 3,
-        fileInput("file_2", "选择 CSV 或 Excel 文件",
-                  accept = c(".csv", ".xls", ".xlsx")),
-        
-        checkboxInput("header_2", "文件包含表头", TRUE),
-        radioButtons("sep_2", "分隔符",
-                     choices = c(逗号 = ",", 分号 = ";", 制表符 = "\t"),
-                     selected = ","),
-        
-        # 动态参数输入UI
-        uiOutput("parameter_inputs_2"),
-        
-        actionButton("forecast_preles_2", "预测", class = "btn-primary"),
-        actionButton("analyze_deepseek_2", "分析", class = "btn-success"),
-        hr(),
-        h4("结果下载"),
-        radioButtons("format_2", "下载格式",
-                     choices = c("CSV" = "csv", "Excel" = "xlsx"),
-                     selected = "csv"),
-        downloadButton("download_2", "下载结果")
-        
-        
+  body = bs4DashBody(
+    bs4TabItems(
+      # 分析模块 ---------------------------------------------------------------
+      bs4TabItem(
+        tabName = "analysis",
+        fluidRow(
+          column(
+            width = 3,
+            bs4Card(
+              title = "参数设置",
+              width = 12,
+              radioButtons("preles_prebas_1", "模块", 
+                           choices = c("Preles", "Prebas")),
+              conditionalPanel(
+                condition = "input.preles_prebas_1 == 'Preles'",
+                numericInput('PAR_1', '光合有效辐射(PAR)', value = 20),
+                numericInput('TAir_1', '日平均气温(℃)', value = 18),
+                numericInput('VPD_1', '日蒸汽压差(kPa)', value = 1.5),
+                numericInput('Precip_1', '降水量(mm)', value = 3),
+                numericInput('CO2_1', 'CO₂浓度(ppm)', value = 280),
+                numericInput('fAPAR_1', '冠层吸收光合有效辐射比例', value = 1),
+                selectInput('control_1','模型',choices = c('0' = 0, '1' = 1)),
+                actionButton('forecast_preles_1', "预测", status = "primary"),
+                actionButton('analyze_deepseek_1', "分析", status = "info")
+              )
+            )
+          ),
+          column(
+            width = 9,
+            bs4Card(
+              title = "分析结果",
+              width = 12,
+              conditionalPanel(
+                condition = "input.preles_prebas_1 == 'Preles'",
+                h4("基础指标输出"),
+                verbatimTextOutput("preles_forecast_results_1"),
+                hr(),
+                h4("DeepSeek分析"),
+                uiOutput("deepseek_analysis_results_1")
+              )
+            )
+          )
+        )
       ),
       
-      mainPanel(
-        tabsetPanel(
-          tabPanel("数据预览", DTOutput("preview_2")),
-          tabPanel("GPP 结果", 
-                   plotlyOutput("gpp_plot_2"),
-                   DTOutput("gpp_table_2")),
-          tabPanel("ET 结果", 
-                   plotlyOutput("et_plot_2"),
-                   DTOutput("et_table_2")),
-          tabPanel("SW 结果", 
-                   plotlyOutput("sw_plot_2"),
-                   DTOutput("sw_table_2")),
-          tabPanel("DeepSeek分析报告", 
-                   uiOutput("analysis_report_2"),
-                   hr(),
-                   downloadButton("download_report_2", "下载分析报告"))
+      # I/O分析 --------------------------------------------------------------
+      bs4TabItem(
+        tabName = "io",
+        fluidRow(
+          column(
+            width = 3,
+            bs4Card(
+              title = "数据上传",
+              width = 12,
+              fileInput("file_2", "选择文件",
+                        accept = c(".csv", ".xls", ".xlsx")),
+              checkboxInput("header_2", "包含表头", TRUE),
+              radioButtons("sep_2", "分隔符",
+                           choices = c(逗号 = ",", 分号 = ";", 制表符 = "\t")),
+              uiOutput("parameter_inputs_2"),
+              actionButton("forecast_preles_2", "预测", status = "primary"),
+              actionButton("analyze_deepseek_2", "分析", status = "success")
+            ),
+            bs4Card(
+              title = "结果下载",
+              width = 12,
+              radioButtons("format_2", "格式",
+                           choices = c("CSV" = "csv", "Excel" = "xlsx")),
+              downloadButton("download_2", "下载结果", class = "btn-block")
+            )
+          ),
+          column(
+            width = 9,
+            bs4Card(
+              title = "分析结果",
+              width = 12,
+              maximizable = TRUE,
+              tabsetPanel(
+                tabPanel("数据预览", DTOutput("preview_2")),
+                tabPanel("GPP 结果", 
+                         plotlyOutput("gpp_plot_2"),
+                         DTOutput("gpp_table_2")),
+                tabPanel("ET 结果", 
+                         plotlyOutput("et_plot_2"),
+                         DTOutput("et_table_2")),
+                tabPanel("SW 结果", 
+                         plotlyOutput("sw_plot_2"),
+                         DTOutput("sw_table_2")),
+                tabPanel("分析报告", 
+                         uiOutput("analysis_report_2"),
+                         downloadButton("download_report_2", "下载报告"))
+              )
+            )
+          )
+        )
+      ),
+      
+      # 数据库值 --------------------------------------------------------------
+      bs4TabItem(
+        tabName = "database",
+        fluidRow(
+          column(
+            width = 3,
+            bs4Card(
+              title = "参数设置",
+              width = 12,
+              dateRangeInput("date_range_3", "日期范围", 
+                             start = "2019-01-01", end = "2022-02-03"),
+              numericInput("longitude_3", "经度", value = 120),
+              numericInput("latitude_3", "纬度", value = 30),
+              actionButton('forecast_preles_3', "预测", status = "primary"),
+              actionButton('analyze_deepseek_3', "分析", status = "info")
+            )
+          ),
+          column(
+            width = 9,
+            bs4Card(
+              title = "分析结果",
+              width = 12,
+              tabsetPanel(
+                tabPanel("GPP 结果", 
+                         plotlyOutput("gpp_plot_3"),
+                         DTOutput("gpp_table_3")),
+                tabPanel("ET 结果", 
+                         plotlyOutput("et_plot_3"),
+                         DTOutput("et_table_3")),
+                tabPanel("SW 结果", 
+                         plotlyOutput("sw_plot_3"),
+                         DTOutput("sw_table_3")),
+                tabPanel("分析报告", 
+                         uiOutput("analysis_report_3"),
+                         downloadButton("download_report_3", "下载报告"))
+              )
+            )
+          )
+        )
+      ),
+      
+      # 热力图 ---------------------------------------------------------------
+      bs4TabItem(
+        tabName = "heatmap",
+        fluidRow(
+          column(
+            width = 3,
+            bs4Card(
+              title = "空间参数",
+              width = 12,
+              numericInput("lat1_4", "纬度1", value = 30, 
+                           min = -90, max = 90),
+              numericInput("lon1_4", "经度1", value = 110,
+                           min = -180, max = 180),
+              numericInput("lat2_4", "纬度2", value = 35,
+                           min = -90, max = 90),
+              numericInput("lon2_4", "经度2", value = 115,
+                           min = -180, max = 180),
+              dateInput("date_4", "选择日期", value = as.Date("2019-01-01")),
+              actionButton("forecast_preles_4", "生成热力图", status = "primary")
+            )
+          ),
+          column(
+            width = 9,
+            bs4Card(
+              title = "可视化结果",
+              width = 12,
+              maximizable = TRUE,
+              tabsetPanel(
+                tabPanel("GPP 热力图", plotlyOutput("gpp_heatmap_3")),
+                tabPanel("ET 热力图", plotlyOutput("et_heatmap_3")),
+                tabPanel("SW 热力图", plotlyOutput("sw_heatmap_3"))
+              )
+            )
+          )
         )
       )
     )
   ),
-  tabPanel(
-    "数据库值",
-    sidebarLayout(
-      sidebarPanel(
-        dateRangeInput("date_range_3", "选择日期范围：", start = "2019-01-01", end = "2022-02-3"),
-        numericInput("longitude_3", "经度：", value = 120),
-        numericInput("latitude_3", "纬度：", value = 30),
-        actionButton('forecast_preles_3', "预测", class = "btn-primary"),
-        actionButton('analyze_deepseek_3', "分析", class = "btn-primary")
-      ),
-      mainPanel(
-        tabsetPanel(
-          tabPanel("GPP 结果", 
-                   plotlyOutput("gpp_plot_3"),
-                   DTOutput("gpp_table_3")),
-          tabPanel("ET 结果", 
-                   plotlyOutput("et_plot_3"),
-                   DTOutput("et_table_3")),
-          tabPanel("SW 结果", 
-                   plotlyOutput("sw_plot_3"),
-                   DTOutput("sw_table_3")),
-          tabPanel("DeepSeek分析报告", 
-                   uiOutput("analysis_report_3"),
-                   hr(),
-                   downloadButton("download_report_3", "下载分析报告")))
-    )
-  )
-),
-tabPanel(
-  "热力图",
-  sidebarLayout(
-    sidebarPanel(
-      numericInput("lat1_4", "纬度1", value = 30, min = -90, max = 90),
-      numericInput("lon1_4", "经度1", value = 110, min = -180, max = 180),
-      numericInput("lat2_4", "纬度2", value = 35, min = -90, max = 90),
-      numericInput("lon2_4", "经度2", value = 115, min = -180, max = 180),
-      dateInput("date_4", "选择日期", value = as.Date("2019-01-01")),
-      actionButton("forecast_preles_4", "预测")
-    ),
-    mainPanel(
-      tabsetPanel(
-        tabPanel("ET 热力图", plotlyOutput("gpp_heatmap_3")),
-        tabPanel("ET 热力图", plotlyOutput("et_heatmap_3")),
-        tabPanel("SW 热力图", plotlyOutput("sw_heatmap_3")))
-    )
+  footer = bs4DashFooter(
+    left = HTML('<div style="text-align: center;">
+               <a href="https://beian.miit.gov.cn/" target="_blank">
+               陕ICP备2025067822号</a></div>')
   )
 )
-)
+
+
 
 #================================================================================================
 server <- function(input,output,session) {
@@ -746,7 +828,7 @@ server <- function(input,output,session) {
     
     ggplotly(p)
   })
-  output$ET_table_3 <- renderDT({
+  output$et_table_3 <- renderDT({
     df <- weather_rv()
     req(nrow(df) > 0)
     req("date" %in% colnames(df))
@@ -871,7 +953,6 @@ server <- function(input,output,session) {
     df_merged$GPP <- results$GPP
     df_merged$ET  <- results$ET
     df_merged$SW  <- results$SW
-    print(df_merged)
     heatmap_data(df_merged)
   })
   output$gpp_heatmap_3 <- renderPlotly({
